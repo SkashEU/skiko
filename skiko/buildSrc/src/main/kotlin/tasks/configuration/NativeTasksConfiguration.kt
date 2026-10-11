@@ -2,10 +2,10 @@ package tasks.configuration
 
 import Arch
 import CompileSkikoCppTask
+import LinkSkikoTask
 import MergeStaticArchivesTask
-import PatchSkiaSymbolsTask
 import OS
-import SkiaBuildType
+import PatchSkiaSymbolsTask
 import SkikoModuleKind
 import SkikoProjectContext
 import WriteCInteropDefFile
@@ -14,12 +14,17 @@ import dsl.TargetEnv
 import hostArch
 import isCompatibleWithHost
 import joinToTitleCamelCase
+import linkerForTarget
 import mutableListOfLinkerOptions
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
 import org.gradle.api.attributes.Attribute
 import org.gradle.api.attributes.Usage
+import org.gradle.api.provider.Provider
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.getByName
@@ -33,7 +38,6 @@ import registerOrGetSkiaDirProvider
 import registerSkikoTask
 import symbols.HideSkiaSymbolsTask
 import java.io.File
-import kotlin.collections.plus
 
 private val nativeSymbolSourcesOsAttribute =
     Attribute.of("org.jetbrains.skiko.nativeSymbolSources.os", String::class.java)
@@ -219,6 +223,15 @@ fun SkikoProjectContext.compileNativeBridgesTask(
                 }
                 flags.set(linuxFlags)
             }
+            OS.Windows -> {
+                val windowsFlags = mutableListOf(
+                    *buildType.winCompilerFlags,
+                    "-DSKIKO_WINDOWS_DLL",
+                    *skiaPreprocessorFlags(OS.Windows, buildType)
+                )
+
+                flags.set(windowsFlags)
+            }
             else -> throw GradleException("$os not yet supported")
         }
 
@@ -282,6 +295,16 @@ fun SkikoProjectContext.configureNativeTarget(
     val unzipper = registerOrGetSkiaDirProvider(os, arch, isUikitSim)
     val unpackedSkia = unzipper.get()
     val skiaDir = unpackedSkia.absolutePath
+
+    if (os == OS.Windows) {
+        configureWindowsTarget(
+            arch = arch,
+            target = target,
+            targetString = targetString,
+            unzipper = unzipper
+        )
+        return
+    }
 
     val bridgesLibrary = layout.buildDirectory.file("nativeBridges/static/$targetString/$nativeBridgesLibPrefix-$targetString.a")
     val bridgesLibraryPath = bridgesLibrary.get().asFile.absolutePath
@@ -471,6 +494,96 @@ fun SkikoProjectContext.configureNativeTarget(
     target.compilations.all {
         compileTaskProvider.configure {
             dependsOn(hideSkiaSymbols)
+        }
+    }
+}
+
+private fun SkikoProjectContext.configureWindowsTarget(
+    arch: Arch,
+    target: KotlinNativeTarget,
+    targetString: String,
+    unzipper: Provider<File>,
+) = with(this.project) {
+    val os = OS.Windows
+    val skiaDir = unzipper.get().absolutePath
+    val skiaBinDir = "$skiaDir/out/${buildType.id}-$targetString"
+
+    val resolvedBinaryInputs = resolveBinaryInputs(os, arch, TargetEnv.JVM, skiaBinDir)
+
+    val dllOutputName = "$libBaseName-$targetString.dll"
+    val importLibName = "lib$libBaseName-$targetString.dll.a"
+    val bridgeOutputDir = layout.buildDirectory.dir("windowsRuntime/$targetString").get().asFile
+
+    val compileTask = compileNativeBridgesTask(os, arch, isUikitSim = false)
+
+    val linkTask = project.registerSkikoTask<LinkSkikoTask>("linkSkikoWindowsDll", os, arch) {
+        dependsOn(unzipper, compileTask)
+
+        libFiles = project.files(resolvedBinaryInputs.staticArchivePaths.distinct())
+        objectFiles = project.fileTree(compileTask.map { it.outDir.get() }) { include("**/*.o") }
+        libOutputFileName.set(dllOutputName)
+        linker.set(linkerForTarget(os, arch))
+
+        flags.set(mutableListOf<String>().apply {
+            addAll(buildType.winLinkerFlags)
+            addAll(listOf(
+                "/NOLOGO", "/DLL",
+                "Advapi32.lib", "gdi32.lib", "user32.lib", "opengl32.lib", "Winmm.lib"
+            ))
+            addAll(resolvedBinaryInputs.linkFlags)
+        })
+    }
+
+    val importLibFile = bridgeOutputDir.resolve(importLibName)
+    val generateMinGwImportLib = project.registerSkikoTask<DefaultTask>("generateMinGwImportLib", os, arch) {
+        dependsOn(linkTask)
+
+        val dllProvider = linkTask.map { it.outDir.get().asFile.resolve(dllOutputName) }
+        inputs.file(dllProvider)
+        outputs.file(importLibFile)
+
+        doLast {
+            bridgeOutputDir.mkdirs()
+            val dllPath = dllProvider.get().absolutePath
+
+            val exports = ProcessBuilder(windowsSdkPaths.dumpbin.absolutePath, "/EXPORTS", dllPath)
+                .redirectErrorStream(true).start().inputStream.bufferedReader().readText()
+
+            val names = exports.lineSequence().mapNotNull { line ->
+                val t = line.trim().split(Regex("\\s+"))
+                if (t.size >= 4 && t[0].toIntOrNull() != null) t[3] else null
+            }.filter { it.isNotBlank() }.toList()
+
+            val defFile = bridgeOutputDir.resolve("$libBaseName.def")
+            defFile.writeText("LIBRARY $dllOutputName\nEXPORTS\n${names.joinToString("\n")}\n")
+
+            ProcessBuilder(
+                "llvm-dlltool", "-m", "i386:x86-64",
+                "-d", defFile.absolutePath,
+                "-D", dllOutputName,
+                "-l", importLibFile.absolutePath
+            ).start().waitFor()
+        }
+    }
+
+    target.compilations.all {
+        compilerOptions.configure {
+            freeCompilerArgs.addAll(listOf("-include-binary", importLibFile.absolutePath))
+        }
+        compileTaskProvider.configure { dependsOn(generateMinGwImportLib) }
+    }
+    val dllProvider = linkTask.map { it.outDir.get().asFile.resolve(dllOutputName) }
+    val publicationName = target.name
+    project.pluginManager.withPlugin("maven-publish") {
+        val publishing = project.extensions.getByType(PublishingExtension::class.java)
+        publishing.publications.withType(MavenPublication::class.java).configureEach {
+            if (name == publicationName) {
+                artifact(dllProvider) {
+                    classifier = "windows-x64"
+                    extension = "dll"
+                    builtBy(linkTask)
+                }
+            }
         }
     }
 }

@@ -132,6 +132,8 @@ void SKIKO_ASSERT(bool, const char*);
 #ifdef SKIKO_WASM
 #include <emscripten.h>
 #define SKIKO_EXPORT EMSCRIPTEN_KEEPALIVE extern "C"
+#elif defined(_WIN32)
+#define SKIKO_EXPORT extern "C" __declspec(dllexport)
 #else
 #define SKIKO_EXPORT extern "C"
 #endif

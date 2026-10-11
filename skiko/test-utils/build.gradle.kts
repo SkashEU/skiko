@@ -86,6 +86,9 @@ kotlin {
     if (supportNativeTvosX64) {
         tvosX64()
     }
+    if(supportNativeWindows) {
+        mingwX64()
+    }
 
     sourceSets.commonMain.dependencies {
         implementation(kotlin("stdlib"))

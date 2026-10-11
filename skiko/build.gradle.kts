@@ -1,18 +1,16 @@
 @file:OptIn(ExperimentalKotlinGradlePluginApi::class, ExperimentalWasmDsl::class)
 
 import com.android.build.api.dsl.KotlinMultiplatformAndroidLibraryTarget
-import org.gradle.api.tasks.compile.JavaCompile
+import dsl.SkikoDependencyScope
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.compose.internal.publishing.MavenCentralProperties
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinJsCompile
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinNativeCompile
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
-import org.gradle.kotlin.dsl.withType
 import tasks.configuration.*
-import dsl.SkikoDependencyScope
 
 plugins {
     kotlin("multiplatform")
@@ -241,7 +239,6 @@ kotlin {
         }
     }
 
-
     if (supportWeb) {
         skikoProjectContext.declareWasmTasks()
 
@@ -322,6 +319,9 @@ kotlin {
     }
     if (supportNativeTvosX64) {
         skikoProjectContext.configureNativeTarget(OS.TVOS, Arch.X64, tvosX64())
+    }
+    if (supportNativeWindows) {
+        skikoProjectContext.configureNativeTarget(OS.Windows, Arch.X64, mingwX64())
     }
 
     sourceSets.commonMain.dependencies {
