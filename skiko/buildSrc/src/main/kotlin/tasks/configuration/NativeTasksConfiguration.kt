@@ -522,13 +522,18 @@ private fun SkikoProjectContext.configureWindowsTarget(
         libFiles = project.files(resolvedBinaryInputs.staticArchivePaths.distinct())
         objectFiles = project.fileTree(compileTask.map { it.outDir.get() }) { include("**/*.o") }
         libOutputFileName.set(dllOutputName)
+        buildTargetOS.set(os)
+        buildSuffix.set("mingw")
+        buildTargetArch.set(arch)
+        buildVariant.set(buildType)
         linker.set(linkerForTarget(os, arch))
 
         flags.set(mutableListOf<String>().apply {
             addAll(buildType.winLinkerFlags)
             addAll(listOf(
                 "/NOLOGO", "/DLL",
-                "Advapi32.lib", "gdi32.lib", "user32.lib", "opengl32.lib", "Winmm.lib"
+                "Advapi32.lib", "gdi32.lib", "user32.lib", "opengl32.lib", "Winmm.lib",
+                 "d3d12.lib", "d3dcompiler.lib"
             ))
             addAll(resolvedBinaryInputs.linkFlags)
         })
