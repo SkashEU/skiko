@@ -533,7 +533,9 @@ private fun SkikoProjectContext.configureWindowsTarget(
             addAll(listOf(
                 "/NOLOGO", "/DLL",
                 "Advapi32.lib", "gdi32.lib", "user32.lib", "opengl32.lib", "Winmm.lib",
-                 "d3d12.lib", "d3dcompiler.lib"
+                 "d3d12.lib", "d3dcompiler.lib",
+                // in Skia's icu.lib and are not exported from the DLL otherwise.
+                "/EXPORT:uloc_getDefault_skiko", "/EXPORT:uloc_toLanguageTag_skiko"
             ))
             addAll(resolvedBinaryInputs.linkFlags)
         })
